@@ -137,32 +137,42 @@ class WMIExecutor:
 
     def _connect(self) -> None:
         # Import here so the module loads on non-Windows without crashing
-        from impacket.smbconnection import SMBConnection
-        from impacket.dcerpc.v5.dcomrt import (
-            DCOMConnection,
-            CLSID_WbemLevel1Login,
-            IID_IWbemLevel1Login,
-            IWbemLevel1Login,
-        )
-        from impacket.dcerpc.v5.ndr import NULL
+        try:
+            from impacket.smbconnection import SMBConnection
+            from impacket.dcerpc.v5.dcomrt import (
+                DCOMConnection,
+                CLSID_WbemLevel1Login,
+                IID_IWbemLevel1Login,
+                IWbemLevel1Login,
+            )
+            from impacket.dcerpc.v5.ndr import NULL
+        except ImportError as exc:
+            raise ImportError(
+                f"impacket DCOM/WMI modules not found (version issue?). "
+                f"Update impacket: pip install --upgrade impacket. Error: {exc}"
+            ) from exc
 
-        self._smb = SMBConnection(self.host, self.host, timeout=15)
-        self._smb.login(self.username, self.password, self.domain)
+        try:
+            self._smb = SMBConnection(self.host, self.host, timeout=15)
+            self._smb.login(self.username, self.password, self.domain)
 
-        self._dcom = DCOMConnection(
-            self.host,
-            self.username,
-            self.password,
-            self.domain,
-            "",
-            "",
-            oxidResolver=True,
-            doKerberos=False,
-        )
-        iface = self._dcom.CoCreateInstanceEx(CLSID_WbemLevel1Login, IID_IWbemLevel1Login)
-        login = IWbemLevel1Login(iface)
-        self._wbem = login.NTLMLogin("//./root/cimv2", NULL, NULL)
-        login.RemRelease()
+            self._dcom = DCOMConnection(
+                self.host,
+                self.username,
+                self.password,
+                self.domain,
+                "",
+                "",
+                oxidResolver=True,
+                doKerberos=False,
+            )
+            iface = self._dcom.CoCreateInstanceEx(CLSID_WbemLevel1Login, IID_IWbemLevel1Login)
+            login = IWbemLevel1Login(iface)
+            self._wbem = login.NTLMLogin("//./root/cimv2", NULL, NULL)
+            login.RemRelease()
+        except Exception as exc:
+            self._disconnect()
+            raise
 
     def _disconnect(self) -> None:
         if self._dcom:
@@ -256,7 +266,13 @@ class SmbExecExecutor:
 
     def execute_ps(self, script: str) -> str:
         """Run a PowerShell script via a temporary Windows service."""
-        from impacket.dcerpc.v5 import transport, svcctl
+        try:
+            from impacket.dcerpc.v5 import transport, scmr
+        except ImportError as exc:
+            raise ImportError(
+                f"impacket scmr module not found (version issue?). "
+                f"Update impacket: pip install --upgrade impacket. Error: {exc}"
+            ) from exc
         from impacket.dcerpc.v5.ndr import NULL
 
         out_name = f"ncs_{uuid.uuid4().hex[:8]}.json"
@@ -271,40 +287,40 @@ class SmbExecExecutor:
             f"> {out_remote} 2>&1"
         )
 
-        string_binding = f"ncacn_np:{self.host}[\\pipe\\svcctl]"
+        string_binding = f"ncacn_np:{self.host}[\\pipe\\scmr]"
         rpctransport = transport.DCERPCTransportFactory(string_binding)
         rpctransport.set_credentials(
             self.username, self.password, self.domain, "", "", None
         )
         dce = rpctransport.get_dce_rpc()
         dce.connect()
-        dce.bind(svcctl.MSRPC_UUID_SVCCTL)
+        dce.bind(scmr.MSRPC_UUID_SCMR)
 
         try:
-            scm = svcctl.hROpenSCManagerW(dce)["lpScHandle"]
-            svc = svcctl.hRCreateServiceW(
+            scm = scmr.hROpenSCManagerW(dce)["lpScHandle"]
+            svc = scmr.hRCreateServiceW(
                 dce,
                 scm,
                 svc_name,
                 svc_name,
                 lpBinaryPathName=bin_path,
-                dwStartType=svcctl.SERVICE_DEMAND_START,
+                dwStartType=scmr.SERVICE_DEMAND_START,
             )["lpServiceHandle"]
 
             try:
-                svcctl.hRStartServiceW(dce, svc)
+                scmr.hRStartServiceW(dce, svc)
             except Exception:
                 pass  # Service may "fail" but still run the command
 
             time.sleep(2)
 
             try:
-                svcctl.hRDeleteService(dce, svc)
-                svcctl.hRCloseServiceHandle(dce, svc)
+                scmr.hRDeleteService(dce, svc)
+                scmr.hRCloseServiceHandle(dce, svc)
             except Exception:
                 pass
 
-            svcctl.hRCloseServiceHandle(dce, scm)
+            scmr.hRCloseServiceHandle(dce, scm)
         finally:
             dce.disconnect()
 
@@ -373,7 +389,11 @@ def _collect_one(
 
         except Exception as exc:
             last_error = str(exc)
-            log.debug("[%s] %s failed: %s", ip, method_name, exc)
+            # Log at INFO for first attempt (WMI), DEBUG for fallbacks
+            if method_name == "wmiexec":
+                log.info("[%s] %s failed: %s", ip, method_name, exc)
+            else:
+                log.debug("[%s] %s failed: %s", ip, method_name, exc)
 
     log.warning("[%s] All methods failed. Last error (%s): %s", ip, last_method, last_error)
     return ScanError(ip=ip, method=last_method, reason=last_error)
