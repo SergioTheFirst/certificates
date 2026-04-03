@@ -69,6 +69,20 @@ def _check_impacket(log: logging.Logger) -> None:
         except ImportError as exc:
             log.warning("  %-20s MISSING (%s) — %s", label, mod_path, exc)
 
+    # WMI classes: try both locations (moved between impacket versions)
+    wmi_ok = False
+    for mod in ("impacket.dcerpc.v5.dcomrt", "impacket.dcerpc.v5.wmi"):
+        try:
+            m = __import__(mod, fromlist=["CLSID_WbemLevel1Login"])
+            getattr(m, "CLSID_WbemLevel1Login")
+            log.info("  %-20s OK (%s)", "WMI classes", mod)
+            wmi_ok = True
+            break
+        except (ImportError, AttributeError):
+            continue
+    if not wmi_ok:
+        log.warning("  %-20s MISSING — WMI executor will not work", "WMI classes")
+
 
 # ---------------------------------------------------------------------------
 # Main

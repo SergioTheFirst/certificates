@@ -139,18 +139,30 @@ class WMIExecutor:
         # Import here so the module loads on non-Windows without crashing
         try:
             from impacket.smbconnection import SMBConnection
+            from impacket.dcerpc.v5.dcomrt import DCOMConnection
+        except ImportError as exc:
+            raise ImportError(
+                f"impacket core modules not found. "
+                f"Install: pip install impacket. Error: {exc}"
+            ) from exc
+
+        # WMI classes moved between impacket versions:
+        #   older: impacket.dcerpc.v5.dcomrt
+        #   newer: impacket.dcerpc.v5.wmi
+        try:
             from impacket.dcerpc.v5.dcomrt import (
-                DCOMConnection,
                 CLSID_WbemLevel1Login,
                 IID_IWbemLevel1Login,
                 IWbemLevel1Login,
             )
-            from impacket.dcerpc.v5.ndr import NULL
-        except ImportError as exc:
-            raise ImportError(
-                f"impacket DCOM/WMI modules not found (version issue?). "
-                f"Update impacket: pip install --upgrade impacket. Error: {exc}"
-            ) from exc
+        except ImportError:
+            from impacket.dcerpc.v5.wmi import (
+                CLSID_WbemLevel1Login,
+                IID_IWbemLevel1Login,
+                IWbemLevel1Login,
+            )
+
+        from impacket.dcerpc.v5.ndr import NULL
 
         try:
             self._smb = SMBConnection(self.host, self.host, timeout=15)
@@ -287,7 +299,7 @@ class SmbExecExecutor:
             f"> {out_remote} 2>&1"
         )
 
-        string_binding = f"ncacn_np:{self.host}[\\pipe\\scmr]"
+        string_binding = f"ncacn_np:{self.host}[\\pipe\\svcctl]"
         rpctransport = transport.DCERPCTransportFactory(string_binding)
         rpctransport.set_credentials(
             self.username, self.password, self.domain, "", "", None
