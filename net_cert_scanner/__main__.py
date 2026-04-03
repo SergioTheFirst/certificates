@@ -44,6 +44,33 @@ def _setup_logging(log_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Impacket diagnostics
+# ---------------------------------------------------------------------------
+
+def _check_impacket(log: logging.Logger) -> None:
+    """Log impacket version and verify required modules are importable."""
+    try:
+        import impacket
+        ver = getattr(impacket, "version", getattr(impacket, "__version__", "unknown"))
+        log.info("impacket version: %s", ver)
+    except ImportError:
+        log.error("impacket is NOT installed. Run: pip install impacket")
+        raise SystemExit(1)
+
+    modules = {
+        "SMBConnection": "impacket.smbconnection",
+        "DCOMConnection": "impacket.dcerpc.v5.dcomrt",
+        "scmr (smbexec)": "impacket.dcerpc.v5.scmr",
+    }
+    for label, mod_path in modules.items():
+        try:
+            __import__(mod_path)
+            log.info("  %-20s OK (%s)", label, mod_path)
+        except ImportError as exc:
+            log.warning("  %-20s MISSING (%s) — %s", label, mod_path, exc)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -63,6 +90,9 @@ def main() -> int:
     log = logging.getLogger(__name__)
     log.info("=" * 60)
     log.info("NetCertGuardian started")
+
+    # Pre-check impacket availability
+    _check_impacket(log)
 
     # ------------------------------------------------------------------
     # 2. Determine scan range
